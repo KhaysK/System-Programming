@@ -119,7 +119,8 @@ test_io(void)
 	unit_fail_if(fd1 == -1 || fd2 == -1);
 
 	char buffer[2048];
-	unit_check(ufs_write(fd1, "123", 3) == 3, "data is written");
+	unit_check(ufs_write(fd1, "123###", 3) == 3,
+		"data (only needed) is written");
 	unit_check(ufs_read(fd2, buffer, sizeof(buffer)) == 3, "data is read");
 	unit_check(memcmp(buffer, "123", 3) == 0, "the same data");
 
@@ -132,12 +133,12 @@ test_io(void)
 	unit_fail_if(fd1 == -1);
 	unit_check(ufs_read(fd1, buffer, sizeof(buffer)) == 3, "read");
 	unit_check(memcmp(buffer, "123", 3) == 0, "got data from start");
-	unit_check(ufs_write(fd1, "45678", 5) == 5, "write more");
+	unit_check(ufs_write(fd1, "45678###", 5) == 5, "write more");
 	ufs_close(fd1);
 
 	fd1 = ufs_open("file", 0);
 	unit_fail_if(fd1 == -1);
-	unit_check(ufs_write(fd1, "abcd", 4) == 4, "overwrite");
+	unit_check(ufs_write(fd1, "abcd###", 4) == 4, "overwrite");
 	unit_check(ufs_read(fd1, buffer, sizeof(buffer)) == 4, "read rest");
 	unit_check(memcmp(buffer, "5678", 4) == 0, "got the tail");
 	ufs_close(fd1);
@@ -146,6 +147,21 @@ test_io(void)
 	unit_fail_if(fd1 == -1);
 	unit_check(ufs_read(fd1, buffer, sizeof(buffer)) == 8, "read all");
 	unit_check(memcmp(buffer, "abcd5678", 4) == 0, "check all");
+	ufs_close(fd1);
+	/*
+	 * Ensure the data can be anything. Not just a zero terminated string.
+	 */
+	fd1 = ufs_open("file", 0);
+	unit_fail_if(fd1 == -1);
+	unit_check(ufs_write(fd1, "1\0" "2\0" "3\0", 6) == 6,
+		"data with zeros");
+	ufs_close(fd1);
+	fd1 = ufs_open("file", 0);
+	unit_fail_if(fd1 == -1);
+	unit_check(ufs_read(fd1, buffer, 6) == 6,
+		"read data with zeros");
+	unit_check(memcmp(buffer, "1\0" "2\0" "3\0", 6) == 0,
+		"check with zeros");
 	ufs_close(fd1);
 	/*
 	 * Write multiple blocks.
@@ -370,7 +386,9 @@ test_resize(void)
 {
 #ifdef NEED_RESIZE
 	unit_test_start();
-
+	/*
+	 * One descriptor for shrinking and then access again.
+	 */
 	int fd = ufs_open("file", UFS_CREATE);
 	unit_fail_if(fd == -1);
 	char buffer[2048];
@@ -391,6 +409,31 @@ test_resize(void)
 	rc = ufs_write(fd, buffer, sizeof(buffer));
 	unit_check(rc == sizeof(buffer),
 		   "opened descriptor beyond new border still works");
+	unit_fail_if(ufs_close(fd) != 0);
+	unit_fail_if(ufs_delete("file") != 0);
+	/*
+	 * One descriptor is opened, moved, then another descriptor shrinks this
+	 * file. The first descriptor should stay valid.
+	 */
+	fd = ufs_open("file", UFS_CREATE);
+	unit_fail_if(fd == -1);
+	rc = ufs_write(fd, buffer, sizeof(buffer));
+	unit_fail_if(rc != sizeof(buffer));
+
+	fd2 = ufs_open("file", 0);
+	unit_fail_if(fd2 == -1);
+	new_size = 3;
+	rc = ufs_resize(fd2, new_size);
+	unit_fail_if(rc != 0);
+
+	rc = ufs_write(fd, "after", 5);
+	unit_fail_if(rc != 5);
+
+	rc = ufs_read(fd2, buffer, sizeof(buffer));
+	unit_fail_if(rc != 8);
+	unit_check(memcmp(buffer, "aaaafter", 8) == 0,
+		"descriptor was affected by resize and still works");
+	unit_fail_if(ufs_close(fd2) != 0);
 	unit_fail_if(ufs_close(fd) != 0);
 	unit_fail_if(ufs_delete("file") != 0);
 
@@ -415,4 +458,3 @@ main(void)
 	unit_test_finish();
 	return 0;
 }
-

@@ -67,7 +67,6 @@ struct filedesc {
  * taken by next ufs_open() call.
  */
 static struct filedesc **file_descriptors = NULL;
-static int file_descriptor_count = 0;
 static int file_descriptor_capacity = 0;
 
 enum ufs_error_code
@@ -159,7 +158,6 @@ int ufs_open(const char *filename, int flags) {
         available_fd = file_descriptor_capacity - 1;
     }
 
-    ++file_descriptor_count;
     file_descriptors[available_fd] = file_desc_ptr;
 
     // Return the file descriptor handle
@@ -187,6 +185,9 @@ ssize_t ufs_write(int _fd, const char *buf, size_t size) {
         ufs_error_code = UFS_ERR_NO_PERMISSION;
         return -1; 
     }
+
+	if (file_desc->offset > file_desc->file->size)
+		file_desc->offset = file_desc->file->size;
 
     struct file *file = file_desc->file;
 
@@ -281,6 +282,9 @@ ssize_t ufs_read(int fd, char *buf, size_t size)
         ufs_error_code = UFS_ERR_NO_PERMISSION;
         return -1;
     }
+
+	if (file_desc->offset > file_desc->file->size)
+		file_desc->offset = file_desc->file->size;
 
     Block *current_block = file_desc->file->block_list;
 
@@ -381,7 +385,6 @@ int ufs_close(int fd) {
 
     free(file_descriptors[fd]);
     file_descriptors[fd] = NULL;
-    --file_descriptor_count;
 
     // if file descriptor was at the end of the list,
     // we can decrease list size
@@ -508,5 +511,9 @@ int ufs_resize(int _fd, size_t new_size) {
     }
 
     f->size = new_size;
+
+    if (f->last_block)
+		f->last_block->occupied = new_size % BLOCK_SIZE;
+        
     return 0;
 }
