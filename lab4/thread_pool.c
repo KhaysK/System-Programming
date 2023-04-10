@@ -4,7 +4,8 @@
 #include <stdio.h>
 
 enum states {
-	TASK_WAITING,
+    TASK_WAITING_PUSH,
+	TASK_WAITING_THREAD,
 	TASK_RUNNING,
 	TASK_FINISHED
 };
@@ -13,7 +14,8 @@ struct thread_task {
 	thread_task_f function;
 	void *arg;
 	enum states task_state;
-
+    pthread_t thread_worker;
+    void **result;
 	/* PUT HERE OTHER MEMBERS */
 };
 
@@ -28,9 +30,15 @@ struct thread_pool {
 	/* PUT HERE OTHER MEMBERS */
 };
 
-void *worker_thread(void *arg) {
-    struct thread_pool *pool = (struct thread_pool *) arg;
+typedef struct {
+    struct thread_pool *pool;
+    int thread_id;
+} thread_args_t;
 
+void *worker_thread(void *arg) {
+    thread_args_t *args = (thread_args_t *) arg; 
+    struct thread_pool *pool = args->pool;
+    
     for (;;) {
         pthread_mutex_lock(&pool->mutex);
 
@@ -42,23 +50,17 @@ void *worker_thread(void *arg) {
             pthread_mutex_unlock(&pool->mutex);
             pthread_exit(NULL);
         }
-
+        
         struct thread_task *task = &pool->task_queue[--pool->task_count];
-
+        // task->thread_worker = pool->threads[args->thread_id];
         pthread_mutex_unlock(&pool->mutex);
 
         task->task_state = TASK_RUNNING;
         task->function(task->arg);
-
-        // if (task->result) {
-        //     *(task->result) = task->function(task->arg);
-        // }
-
+    
         task->task_state = TASK_FINISHED;
 
-        // if (task->completion_signal) {
-        //     pthread_cond_signal(&task->completion_cond);
-        // }
+        pthread_exit(task->arg);
     }
 }
 
@@ -93,7 +95,10 @@ thread_pool_new(int max_thread_count, struct thread_pool **pool)
         return -1;
     }
     for (int i = 0; i < max_thread_count; i++) {
-        pthread_create(&(new_pool->threads[i]), NULL, worker_thread, (void*)new_pool);
+        thread_args_t *args = malloc(sizeof(thread_args_t));
+        args->thread_id = i;
+        args->pool = new_pool;
+        pthread_create(&(new_pool->threads[i]), NULL, worker_thread, (void*)args);
     }
 
     // Initialize the mutex
@@ -141,13 +146,10 @@ int thread_pool_delete(struct thread_pool *pool) {
     }
     // Mark the pool as shutdown
     pool->is_shutdown = true;
-	printf("Wake up\n");
     // Wake up all waiting threads
     pthread_cond_broadcast(&(pool->task_cond));
-	printf("Join threads\n");
     // Join all threads
     for (int i = 0; i < pool->max_thread_count; i++) {
-		printf("Join thread %d\n",i);
         pthread_join(pool->threads[i], NULL);
     }
     // Free the task queue
@@ -162,50 +164,78 @@ int thread_pool_delete(struct thread_pool *pool) {
 
     // Free the pool structure itself
     free(pool);
-	printf("Delete end\n");
     return 0;
 }
 
 int
 thread_pool_push_task(struct thread_pool *pool, struct thread_task *task)
 {
-/* IMPLEMENT THIS FUNCTION */
-	return TPOOL_ERR_NOT_IMPLEMENTED;
+	pthread_mutex_lock(&pool->mutex);
+    if (pool->task_count >= TPOOL_MAX_TASKS) {
+        pthread_mutex_unlock(&pool->mutex);
+        return TPOOL_ERR_TOO_MANY_TASKS;
+    }
+
+    pool->task_queue[pool->task_count++] = *task;
+    task->task_state = TASK_WAITING_THREAD;
+
+    pthread_cond_signal(&pool->task_cond);
+    pthread_mutex_unlock(&pool->mutex);
+
+    return 0;
 }
 
 int
 thread_task_new(struct thread_task **task, thread_task_f function, void *arg)
 {
-/* IMPLEMENT THIS FUNCTION */
-	return TPOOL_ERR_NOT_IMPLEMENTED;
+	*task = malloc(sizeof(struct thread_task));
+
+    (*task)->function = function;
+    (*task)->arg = arg;
+    (*task)->task_state = TASK_WAITING_PUSH;
+    return 0;
 }
 
 bool
 thread_task_is_finished(const struct thread_task *task)
 {
-	/* IMPLEMENT THIS FUNCTION */
-	return TPOOL_ERR_NOT_IMPLEMENTED;
+	if(task->task_state == TASK_FINISHED) 
+		return true;
+	return false;
 }
 
 bool
 thread_task_is_running(const struct thread_task *task)
 {
-	/* IMPLEMENT THIS FUNCTION */
-	return TPOOL_ERR_NOT_IMPLEMENTED;
+	if(task->task_state == TASK_RUNNING) 
+		return true;
+	return false;
 }
 
 int
 thread_task_join(struct thread_task *task, void **result)
 {
-	/* IMPLEMENT THIS FUNCTION */
-	return TPOOL_ERR_NOT_IMPLEMENTED;
+    if (task->task_state == TASK_WAITING_PUSH ) {
+        return TPOOL_ERR_TASK_NOT_PUSHED;
+    }
+    // Wait for the task to finish
+    pthread_join(task->thread_worker, result);
+    return 0;
 }
 
 int
 thread_task_delete(struct thread_task *task)
 {
-	/* IMPLEMENT THIS FUNCTION */
-	return TPOOL_ERR_NOT_IMPLEMENTED;
+    if (task == NULL) {
+        return TPOOL_ERR_INVALID_ARGUMENT;
+    }
+
+    if (task->task_state > TASK_WAITING_PUSH) {
+        return TPOOL_ERR_TASK_IN_POOL;
+    }
+
+    free(task);
+    return 0;
 }
 
 #ifdef NEED_DETACH
