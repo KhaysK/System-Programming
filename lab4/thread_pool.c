@@ -81,8 +81,8 @@ void *worker_thread(void *arg) {
         task->result = result;
         task->task_state = TASK_FINISHED;
 
-        pthread_mutex_unlock(task->task_mutex);
         pthread_cond_signal(task->task_cond);
+        pthread_mutex_unlock(task->task_mutex);
     }
 }
 
@@ -171,7 +171,11 @@ int thread_pool_delete(struct thread_pool *pool) {
     // Mark the pool as shutdown
     pool->is_shutdown = true;
     // Wake up all waiting threads
+    pthread_mutex_lock(pool->mutex);
+
     pthread_cond_broadcast(pool->task_cond);
+
+    pthread_mutex_unlock(pool->mutex);
     // Join all threads
     for (int i = 0; i < pool->max_thread_count; i++) {
         pthread_join(pool->threads[i], NULL);
