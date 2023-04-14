@@ -2,6 +2,7 @@
 #ifndef THREAD_POOL_DEFINED
 #define THREAD_POOL_DEFINED
 #define NEED_DETACH
+#define NEED_TIMED_JOIN
 
 struct thread_pool;
 struct thread_task;
@@ -113,7 +114,7 @@ int
 thread_task_join(struct thread_task *task, void **result);
 
 int
-thread_task_join_with_timeout(struct thread_task *task, double timeout, void **result);
+thread_task_timed_join(struct thread_task *task, double timeout, void **result);
 
 /**
  * Delete a task, free its memory.
