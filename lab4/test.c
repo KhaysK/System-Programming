@@ -57,26 +57,63 @@ test_push(void)
 	unit_fail_if(thread_pool_new(3, &p) != 0);
 	int arg = 0;
 	void *result;
+	/*
+	 * Can delete before push.
+	 */
 	unit_check(thread_task_new(&t, task_incr_f, &arg) == 0,
 		   "created new task");
 	unit_check(thread_task_delete(t) == 0,
 		   "task can be deleted before push");
 	unit_fail_if(thread_task_new(&t, task_incr_f, &arg) != 0);
-
+	/*
+	 * Bad join or delete.
+	 */
 	unit_check(thread_task_join(t, &result) == TPOOL_ERR_TASK_NOT_PUSHED,
 		   "can't join a not pushed task");
 	unit_check(thread_pool_push_task(p, t) == 0, "pushed");
 	unit_check(thread_task_delete(t) == TPOOL_ERR_TASK_IN_POOL,
 		   "can't delete before join");
+	/*
+	 * Normal push.
+	 */
 	unit_check(thread_task_join(t, &result) == 0, "joined");
 	unit_check(result == &arg && arg == 1, "the task really did something");
-
 	unit_check(thread_pool_thread_count(p) == 1, "one active thread");
+	/*
+	 * Re-push.
+	 */
 	unit_check(thread_pool_push_task(p, t) == 0, "pushed again");
 	unit_check(thread_task_join(t, &result) == 0, "joined");
 	unit_check(thread_pool_thread_count(p) == 1, "still one active thread");
 	unit_check(thread_task_delete(t) == 0, "deleted after join");
-
+	/*
+	 * Re-push stress.
+	 */
+	const int count = 1000;
+	struct thread_task **tasks = malloc(sizeof(*tasks) * count);
+	arg = 0;
+	for (int i = 0; i < count; ++i) {
+		struct thread_task **tp = &tasks[i];
+		unit_fail_if(thread_task_new(tp, task_wait_for_f, &arg) != 0);
+		unit_fail_if(thread_pool_push_task(p, *tp) != 0);
+	}
+	__atomic_store_n(&arg, 1, __ATOMIC_RELAXED);
+	for (int i = 0; i < count; ++i) {
+		t = tasks[i];
+		unit_fail_if(thread_task_join(t, &result) != 0);
+		unit_fail_if(result != &arg);
+		if (i % 2 == 0)
+			unit_fail_if(thread_pool_push_task(p, t) != 0);
+		else
+			unit_fail_if(thread_task_delete(t) != 0);
+	}
+	for (int i = 0; i < count; i += 2) {
+		t = tasks[i];
+		unit_fail_if(thread_task_join(t, &result) != 0);
+		unit_fail_if(result != &arg);
+		unit_fail_if(thread_task_delete(t) != 0);
+	}
+	free(tasks);
 	unit_fail_if(thread_pool_delete(p) != 0);
 
 	unit_test_finish();
@@ -251,6 +288,43 @@ test_timed_join(void)
 #endif
 }
 
+static void
+test_detach(void)
+{
+#ifdef NEED_DETACH
+	unit_test_start();
+
+	struct thread_pool *p;
+	int arg = 0;
+	struct thread_task *task;
+	unit_fail_if(thread_pool_new(5, &p) != 0);
+	/*
+	 * Push a pack of tasks which should delete themselves. The fact of
+	 * deletion needs to be checked with a sanitizer like heap_help.
+	 */
+	unit_check(true, "detach pushed tasks");
+	for (int i = 0; i < 1000; ++i) {
+		unit_fail_if(thread_task_new(&task, task_incr_f, &arg) != 0);
+		unit_fail_if(thread_pool_push_task(p, task) != 0);
+		if (thread_task_detach(task) != 0)
+			unit_check(false, "detach failed");
+	}
+	
+	while (__atomic_load_n(&arg, __ATOMIC_RELAXED) != 1000)
+		usleep(1000);
+	/*
+	 * Non-pushed task can not be detached.
+	 */
+	unit_fail_if(thread_task_new(&task, task_incr_f, &arg) != 0);
+	unit_check(thread_task_detach(task) == TPOOL_ERR_TASK_NOT_PUSHED,
+		   "detach non-pushed task");
+	unit_fail_if(thread_task_delete(task) != 0);
+	unit_fail_if(thread_pool_delete(p) != 0);
+
+	unit_test_finish();
+#endif
+}
+
 int
 main(void)
 {
@@ -261,6 +335,7 @@ main(void)
 	test_thread_pool_delete();
 	test_thread_pool_max_tasks();
 	test_timed_join();
+	test_detach();
 
 	unit_test_finish();
 	return 0;
