@@ -73,6 +73,7 @@ test_push(void)
 	unit_check(thread_pool_push_task(p, t) == 0, "pushed");
 	unit_check(thread_task_delete(t) == TPOOL_ERR_TASK_IN_POOL,
 		   "can't delete before join");
+		   
 	/*
 	 * Normal push.
 	 */
@@ -266,6 +267,7 @@ test_timed_join(void)
 	clock_gettime(CLOCK_MONOTONIC, &ts2);
 	uint64_t ns1 = ts1.tv_sec * 1000000000 + ts1.tv_nsec;
 	uint64_t ns2 = ts2.tv_sec * 1000000000 + ts2.tv_nsec;
+	
 	unit_check(ns2 - ns1 > 100000000, "didn't exit too early");
 
 	unit_check(thread_task_timed_join(task, -10000, &result) ==

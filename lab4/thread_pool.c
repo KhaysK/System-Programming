@@ -87,15 +87,16 @@ void *worker_thread(void *arg)
         void *result = function(arg);
 
         pthread_mutex_lock(task->task_mutex);
+        pthread_mutex_lock(pool->mutex);
 
         task->result = result;
         if (task->task_state != TASK_DETACHED)
             task->task_state = TASK_FINISHED;
-
+        
         pthread_cond_signal(task->task_cond);
         pthread_mutex_unlock(task->task_mutex);
 
-        pthread_mutex_lock(pool->mutex);
+
         pool->busy_thread_count--;
         pthread_mutex_unlock(pool->mutex);
         if (task->task_state == TASK_DETACHED)
@@ -175,8 +176,7 @@ int thread_pool_delete(struct thread_pool *pool)
 {
     pthread_mutex_lock(pool->mutex);
     // Check if there are any pending tasks
-
-    if (pool->task_count > 0 || pool->busy_thread_count != 0)
+    if (pool->task_count > 0 || pool->busy_thread_count > 0)
     {
         pthread_mutex_unlock(pool->mutex);
         return TPOOL_ERR_HAS_TASKS;
@@ -194,7 +194,7 @@ int thread_pool_delete(struct thread_pool *pool)
     {
         pthread_join(pool->threads[i], NULL);
     }
-
+    
     // Free the task queue
     free(pool->task_queue);
 
@@ -327,15 +327,18 @@ int thread_task_timed_join(struct thread_task *task, double timeout, void **resu
     }
 
     // Wait for the task to finish
-    int ret;
-
-    time_t timeout_sec = (time_t)timeout;
-    long timeout_nsec = (long)((timeout - (double)timeout_sec) * 1e9);
+    int ret = 0;
 
     struct timespec ts_timeout;
     clock_gettime(CLOCK_MONOTONIC, &ts_timeout);
-    ts_timeout.tv_sec += timeout_sec;
-    ts_timeout.tv_nsec += timeout_nsec;
+    ts_timeout.tv_sec += (time_t)timeout;
+    ts_timeout.tv_nsec += (long)((timeout - (double)(time_t)timeout) * 1e9);
+
+    if (ts_timeout.tv_nsec >= 1000000000) 
+    {
+        ts_timeout.tv_sec += 1;
+        ts_timeout.tv_nsec -= 1000000000;
+    }
 
     while (task->task_state != TASK_FINISHED)
     {
@@ -347,6 +350,7 @@ int thread_task_timed_join(struct thread_task *task, double timeout, void **resu
             ret = ETIMEDOUT;
             break;
         }
+
         ret = pthread_cond_timedwait(task->task_cond, task->task_mutex, &ts_timeout);
     }
 
@@ -366,22 +370,28 @@ int thread_task_delete(struct thread_task *task)
 {
     if (task == NULL)
     {
-        return TPOOL_ERR_INVALID_ARGUMENT;
+        return TPOOL_ERR_INVALID_ARGUMENT;   
     }
 
-    if (task->task_state == TASK_DETACHED)
+    pthread_mutex_lock(task->task_mutex);
+    if (task->task_state == TASK_DETACHED){
+        pthread_mutex_unlock(task->task_mutex);
         return TPOOL_ERR_TASK_DETACHED;
+    }
+       
 
     if (task->task_state > TASK_WAITING_PUSH && task->task_state < TASK_FINISHED)
     {
+        pthread_mutex_unlock(task->task_mutex);
         return TPOOL_ERR_TASK_IN_POOL;
     }
+
+    pthread_mutex_unlock(task->task_mutex);
     pthread_cond_destroy(task->task_cond);
     free(task->task_cond);
     pthread_mutex_destroy(task->task_mutex);
     free(task->task_mutex);
     free(task);
-
     return 0;
 }
 
