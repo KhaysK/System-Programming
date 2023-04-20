@@ -73,7 +73,6 @@ test_push(void)
 	unit_check(thread_pool_push_task(p, t) == 0, "pushed");
 	unit_check(thread_task_delete(t) == TPOOL_ERR_TASK_IN_POOL,
 		   "can't delete before join");
-		   
 	/*
 	 * Normal push.
 	 */
@@ -281,11 +280,10 @@ test_timed_join(void)
 	ns1 = ts1.tv_sec * 1000000000 + ts1.tv_nsec;
 	ns2 = ts2.tv_sec * 1000000000 + ts2.tv_nsec;
 	unit_check(ns2 - ns1 < 1000000000, "1 sec didn't pass");
-
+	
 	unit_fail_if(result != &arg);
 	unit_fail_if(thread_task_delete(task) != 0);
 	unit_fail_if(thread_pool_delete(p) != 0);
-
 	unit_test_finish();
 #endif
 }
@@ -295,7 +293,6 @@ test_detach(void)
 {
 #ifdef NEED_DETACH
 	unit_test_start();
-
 	struct thread_pool *p;
 	int arg = 0;
 	struct thread_task *task;

@@ -11,7 +11,8 @@ enum states
     TASK_WAITING_PUSH,
     TASK_WAITING_THREAD,
     TASK_RUNNING,
-    TASK_FINISHED
+    TASK_FINISHED,
+    TASK_JOINED
 };
 
 struct thread_task
@@ -163,10 +164,10 @@ int thread_pool_thread_count(const struct thread_pool *pool)
     int active_threads = 0;
 
     // Lock the mutex to prevent other threads from modifying the pool
-    pthread_mutex_lock(pool->mutex);
-
+    pthread_mutex_lock(pool->mutex);    
+    
     active_threads = pool->active_thread_count;
-
+    
     pthread_mutex_unlock(pool->mutex);
 
     return active_threads;
@@ -303,7 +304,7 @@ int thread_task_join(struct thread_task *task, void **result)
         pthread_cond_wait(task->task_cond, task->task_mutex);
 
     *result = task->result;
-
+    task->task_state = TASK_JOINED;
     pthread_mutex_unlock(task->task_mutex);
     return 0;
 }
@@ -361,7 +362,7 @@ int thread_task_timed_join(struct thread_task *task, double timeout, void **resu
     }
 
     *result = task->result;
-
+    task->task_state = TASK_JOINED;
     pthread_mutex_unlock(task->task_mutex);
     return 0;
 }
@@ -379,8 +380,7 @@ int thread_task_delete(struct thread_task *task)
         return TPOOL_ERR_TASK_DETACHED;
     }
        
-
-    if (task->task_state > TASK_WAITING_PUSH && task->task_state < TASK_FINISHED)
+    if (task->task_state > TASK_WAITING_PUSH && task->task_state < TASK_JOINED)
     {
         pthread_mutex_unlock(task->task_mutex);
         return TPOOL_ERR_TASK_IN_POOL;
