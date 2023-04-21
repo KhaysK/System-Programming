@@ -65,11 +65,12 @@ void *worker_thread(void *arg)
         if (pool->is_shutdown)
         {
             pthread_mutex_unlock(pool->mutex);
+            free(args);
             pthread_exit(NULL);
         }
 
         struct thread_task *task = pool->task_queue[--pool->task_count];
-
+        
         pool->busy_thread_count++;
 
         pthread_mutex_lock(task->task_mutex);
@@ -95,13 +96,17 @@ void *worker_thread(void *arg)
             task->task_state = TASK_FINISHED;
         
         pthread_cond_signal(task->task_cond);
-        pthread_mutex_unlock(task->task_mutex);
 
 
         pool->busy_thread_count--;
         pthread_mutex_unlock(pool->mutex);
-        if (task->task_state == TASK_DETACHED)
+        
+        if (task->task_state == TASK_DETACHED){
+            pthread_mutex_unlock(task->task_mutex);
+            task->task_state = TASK_JOINED;
             thread_task_delete(task);
+        }else 
+            pthread_mutex_unlock(task->task_mutex);
     }
 }
 
@@ -204,8 +209,11 @@ int thread_pool_delete(struct thread_pool *pool)
 
     // Destroy the mutex and condition variables
     pthread_mutex_destroy(pool->mutex);
+    free(pool->mutex);
     pthread_cond_destroy(pool->task_cond);
+    free(pool->task_cond);
     pthread_condattr_destroy(pool->attr);
+    free(pool->attr);
 
     // Free the pool structure itself
     free(pool);
@@ -297,11 +305,12 @@ int thread_task_join(struct thread_task *task, void **result)
         pthread_mutex_unlock(task->task_mutex);
         return TPOOL_ERR_TASK_NOT_PUSHED;
     }
-
+    
     // Wait for the task to finish
-
+    
     while (task->task_state != TASK_FINISHED)
         pthread_cond_wait(task->task_cond, task->task_mutex);
+        
 
     *result = task->result;
     task->task_state = TASK_JOINED;
@@ -373,7 +382,7 @@ int thread_task_delete(struct thread_task *task)
     {
         return TPOOL_ERR_INVALID_ARGUMENT;   
     }
-
+    
     pthread_mutex_lock(task->task_mutex);
     if (task->task_state == TASK_DETACHED){
         pthread_mutex_unlock(task->task_mutex);
@@ -387,6 +396,7 @@ int thread_task_delete(struct thread_task *task)
     }
 
     pthread_mutex_unlock(task->task_mutex);
+
     pthread_cond_destroy(task->task_cond);
     free(task->task_cond);
     pthread_mutex_destroy(task->task_mutex);
