@@ -102,8 +102,8 @@ void *worker_thread(void *arg)
         pthread_mutex_unlock(pool->mutex);
         
         if (task->task_state == TASK_DETACHED){
-            pthread_mutex_unlock(task->task_mutex);
             task->task_state = TASK_JOINED;
+            pthread_mutex_unlock(task->task_mutex);
             thread_task_delete(task);
         }else 
             pthread_mutex_unlock(task->task_mutex);
@@ -384,6 +384,7 @@ int thread_task_delete(struct thread_task *task)
     }
     
     pthread_mutex_lock(task->task_mutex);
+
     if (task->task_state == TASK_DETACHED){
         pthread_mutex_unlock(task->task_mutex);
         return TPOOL_ERR_TASK_DETACHED;
