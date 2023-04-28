@@ -1,14 +1,16 @@
 #include "thread_pool.h"
+#include "heap_help.h"
 #include "unit.h"
 #include <pthread.h>
 #include <unistd.h>
 #include <stdint.h>
+#include <time.h>
 
 static void
 test_new(void)
 {
 	unit_test_start();
-
+	
 	struct thread_pool *p;
 	unit_check(thread_pool_new(TPOOL_MAX_THREADS + 1, &p) ==
 		   TPOOL_ERR_INVALID_ARGUMENT, "too big thread count is "\
@@ -60,6 +62,7 @@ test_push(void)
 	/*
 	 * Can delete before push.
 	 */
+	
 	unit_check(thread_task_new(&t, task_incr_f, &arg) == 0,
 		   "created new task");
 	unit_check(thread_task_delete(t) == 0,
@@ -308,7 +311,6 @@ test_detach(void)
 		if (thread_task_detach(task) != 0)
 			unit_check(false, "detach failed");
 	}
-	
 	while (__atomic_load_n(&arg, __ATOMIC_RELAXED) != 1000)
 		usleep(1000);
 	/*
@@ -328,14 +330,13 @@ int
 main(void)
 {
 	unit_test_start();
-
 	test_new();
 	test_push();
 	test_thread_pool_delete();
 	test_thread_pool_max_tasks();
 	test_timed_join();
 	test_detach();
-
 	unit_test_finish();
 	return 0;
 }
+

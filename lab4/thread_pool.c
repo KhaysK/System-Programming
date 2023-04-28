@@ -1,4 +1,6 @@
+#define _POSIX_C_SOURCE 200809L
 #include "thread_pool.h"
+#include "heap_help.h"
 #include <pthread.h>
 #include <stdlib.h>
 #include <stdio.h>
@@ -70,7 +72,7 @@ void *worker_thread(void *arg)
         }
 
         struct thread_task *task = pool->task_queue[--pool->task_count];
-        
+
         pool->busy_thread_count++;
 
         pthread_mutex_lock(task->task_mutex);
@@ -94,19 +96,20 @@ void *worker_thread(void *arg)
         task->result = result;
         if (task->task_state != TASK_DETACHED)
             task->task_state = TASK_FINISHED;
-        
+
         pthread_cond_signal(task->task_cond);
 
-
-        pool->busy_thread_count--;
-        pthread_mutex_unlock(pool->mutex);
-        
-        if (task->task_state == TASK_DETACHED){
+        if (task->task_state == TASK_DETACHED)
+        {
             task->task_state = TASK_JOINED;
             pthread_mutex_unlock(task->task_mutex);
             thread_task_delete(task);
-        }else 
+        }
+        else
             pthread_mutex_unlock(task->task_mutex);
+
+        pool->busy_thread_count--;
+        pthread_mutex_unlock(pool->mutex);
     }
 }
 
@@ -169,10 +172,10 @@ int thread_pool_thread_count(const struct thread_pool *pool)
     int active_threads = 0;
 
     // Lock the mutex to prevent other threads from modifying the pool
-    pthread_mutex_lock(pool->mutex);    
-    
+    pthread_mutex_lock(pool->mutex);
+
     active_threads = pool->active_thread_count;
-    
+
     pthread_mutex_unlock(pool->mutex);
 
     return active_threads;
@@ -200,7 +203,6 @@ int thread_pool_delete(struct thread_pool *pool)
     {
         pthread_join(pool->threads[i], NULL);
     }
-    
     // Free the task queue
     free(pool->task_queue);
 
@@ -305,12 +307,11 @@ int thread_task_join(struct thread_task *task, void **result)
         pthread_mutex_unlock(task->task_mutex);
         return TPOOL_ERR_TASK_NOT_PUSHED;
     }
-    
+
     // Wait for the task to finish
-    
+
     while (task->task_state != TASK_FINISHED)
         pthread_cond_wait(task->task_cond, task->task_mutex);
-        
 
     *result = task->result;
     task->task_state = TASK_JOINED;
@@ -344,7 +345,7 @@ int thread_task_timed_join(struct thread_task *task, double timeout, void **resu
     ts_timeout.tv_sec += (time_t)timeout;
     ts_timeout.tv_nsec += (long)((timeout - (double)(time_t)timeout) * 1e9);
 
-    if (ts_timeout.tv_nsec >= 1000000000) 
+    if (ts_timeout.tv_nsec >= 1000000000)
     {
         ts_timeout.tv_sec += 1;
         ts_timeout.tv_nsec -= 1000000000;
@@ -380,16 +381,17 @@ int thread_task_delete(struct thread_task *task)
 {
     if (task == NULL)
     {
-        return TPOOL_ERR_INVALID_ARGUMENT;   
+        return TPOOL_ERR_INVALID_ARGUMENT;
     }
-    
+
     pthread_mutex_lock(task->task_mutex);
 
-    if (task->task_state == TASK_DETACHED){
+    if (task->task_state == TASK_DETACHED)
+    {
         pthread_mutex_unlock(task->task_mutex);
         return TPOOL_ERR_TASK_DETACHED;
     }
-       
+
     if (task->task_state > TASK_WAITING_PUSH && task->task_state < TASK_JOINED)
     {
         pthread_mutex_unlock(task->task_mutex);
@@ -414,12 +416,13 @@ int thread_task_detach(struct thread_task *task)
     {
         return TPOOL_ERR_INVALID_ARGUMENT;
     }
-
-    if (task->task_state == TASK_DETACHED)
-        return TPOOL_ERR_TASK_DETACHED;
-        
+    
     pthread_mutex_lock(task->task_mutex);
-
+    if (task->task_state == TASK_DETACHED){
+        pthread_mutex_unlock(task->task_mutex);
+        return TPOOL_ERR_TASK_DETACHED;
+    }
+        
     // If the task is not pushed to a pool, return an error.
     if (task->task_state == TASK_WAITING_PUSH)
     {
@@ -430,6 +433,7 @@ int thread_task_detach(struct thread_task *task)
     // If the task is already finished, delete it and return success.
     if (task->task_state == TASK_FINISHED)
     {
+        task->task_state = TASK_JOINED;
         pthread_mutex_unlock(task->task_mutex);
         thread_task_delete(task);
         return 0;
