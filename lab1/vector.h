@@ -69,6 +69,14 @@ void vector_push_str(Vector *vec, char *value)
 void vector_free(Vector *vec)
 {
     free(vec->data);
+
+    if (vec->_isString)
+    {
+        for (int i = 0; i < vec->size; i++)
+        {
+            free(vec->str_data[i]);
+        }
+    }
     free(vec->str_data);
     vec->data = NULL;
     vec->size = 0;

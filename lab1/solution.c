@@ -11,6 +11,7 @@
 
 Vector **vectors;
 int vectors_size = 0;
+int files_size = 0;
 Vector queue;
 struct param
 {
@@ -104,7 +105,7 @@ static int coroutine_func_f(void *context)
 {
 	// Cast the context to a char pointer and store it in a local variable
 	struct param *coro_info = (struct param *)context;
-	char *filename = queue.str_data[--queue.size];
+	char *filename = queue.str_data[--files_size];
 
 	while (filename)
 	{
@@ -139,9 +140,9 @@ static int coroutine_func_f(void *context)
 		printf("Coroutine №%ld ", coro_info->coro_id);
 		printf("finished file %s\n", filename);
 		printf("With total time :%ld \n", coro_info->coro_total_time);
-		if (queue.size == 0)
+		if (files_size == 0)
 			break;
-		filename = queue.str_data[--queue.size];
+		filename = queue.str_data[--files_size];
 	}
 	return 0;
 }
@@ -177,6 +178,7 @@ int main(int argc, char **argv)
 	}
 
 	int files_num = argc - optind;
+	files_size = files_num;
 	vectors = (Vector **)malloc(files_num * sizeof(Vector *));
 	vector_init(&queue);
 
@@ -251,8 +253,10 @@ int main(int argc, char **argv)
 	for (int i = 0; i < files_num; i++)
 	{
 		vector_free(vectors[i]);
+		free(vectors[i]);
 	}
 	free(vectors);
+	free(param);
 	vector_free(&queue);
 	free(ids);
 
