@@ -19,6 +19,7 @@ struct param
 	uint64_t coro_max_time;
 	uint64_t coro_start_time;
 	uint64_t coro_total_time;
+	uint64_t coro_switch_num;
 };
 
 uint64_t getTime()
@@ -62,6 +63,7 @@ Vector *quick_sort(Vector *vec, struct param *coro_info)
 	if (working_time > coro_info->coro_max_time)
 	{
 		coro_info->coro_total_time += working_time;
+		coro_info->coro_switch_num++;
 		coro_yield();
 		coro_info->coro_start_time = getTime();
 	}
@@ -105,12 +107,14 @@ static int coroutine_func_f(void *context)
 {
 	// Cast the context to a char pointer and store it in a local variable
 	struct param *coro_info = (struct param *)context;
-	char *filename = queue.str_data[--files_size];
+	char *filename = NULL;
+	
+	if(files_size > 0)
+		filename = queue.str_data[--files_size];
 
 	while (filename)
 	{
 		coro_info->coro_start_time = getTime();
-		coro_info->coro_total_time = 0;
 		// Print a message to indicate which file is being read
 		printf("Coroutine №%ld reading file: %s\n", coro_info->coro_id, filename);
 
@@ -137,13 +141,15 @@ static int coroutine_func_f(void *context)
 		quick_sort(vector, coro_info);
 
 		vectors[vectors_size++] = vector;
-		printf("Coroutine №%ld ", coro_info->coro_id);
+		printf("\nCoroutine №%ld ", coro_info->coro_id);
 		printf("finished file %s\n", filename);
-		printf("With total time :%ld \n", coro_info->coro_total_time);
 		if (files_size == 0)
 			break;
 		filename = queue.str_data[--files_size];
 	}
+	printf("\nCoroutine №%ld Statistics:\n", coro_info->coro_id);
+	printf("Total working time :%ld \n", coro_info->coro_total_time);
+	printf("Number of switches :%ld \n", coro_info->coro_switch_num);
 	return 0;
 }
 
@@ -154,6 +160,7 @@ int main(int argc, char **argv)
 		printf("Error: arguments are not passed use -h to see description\n");
 		return -1;
 	}
+	uint64_t main_start_time = getTime();
 	int coro_num = atoi(argv[argc - 2]);
 	int opt;
 	uint64_t timeout;
@@ -166,13 +173,13 @@ int main(int argc, char **argv)
 			printf("Options:\n");
 			printf("-h  Show this help message and exit\n");
 			printf("-c  The number of coroutines to use for testing\n");
-			printf("-t  The T value for coroutine timeouts in miliseconds\n");
+			printf("-t  The T value for coroutine timeouts in microseconds\n");
 			exit(EXIT_SUCCESS);
 		case 'c':
 			coro_num = atoi(optarg);
 			break;
 		case 't':
-			timeout = atoi(optarg) * 1000;
+			timeout = atoi(optarg);
 			break;
 		}
 	}
@@ -201,6 +208,7 @@ int main(int argc, char **argv)
 		param[i].coro_max_time = timeout / coro_num;
 		param[i].coro_start_time = 0;
 		param[i].coro_total_time = 0;
+		param[i].coro_switch_num = 0;
 		coro_new(coroutine_func_f, &param[i]);
 	}
 
@@ -260,5 +268,6 @@ int main(int argc, char **argv)
 	vector_free(&queue);
 	free(ids);
 
+	printf("\nProgram total working time is %ld \n", getTime() - main_start_time);
 	return 0;
 }
