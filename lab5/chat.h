@@ -12,7 +12,7 @@ enum chat_errcode {
 };
 
 enum chat_events {
-	CHAT_EVENT_INPUT,
+	CHAT_EVENT_INPUT = 1,
 	CHAT_EVENT_OUTPUT,
 };
 

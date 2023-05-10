@@ -5,133 +5,369 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <netdb.h>
+#include <stdio.h>
+#include <sys/epoll.h>
+#include <fcntl.h>
+#define MAX_BUFFER_SIZE 1024
+#define BOTH() EPOLLIN | EPOLLET
 
-struct chat_peer {
-	/** Client's socket. To read/write messages. */
-	int socket;
-	/** Output buffer. */
-	/* ... */
-	/* PUT HERE OTHER MEMBERS */
+struct chat_peer
+{
+    /** Client's socket. To read/write messages. */
+    int socket;
+    /** Output buffer. */
+    char *output_buff;
+    size_t buff_capacity;
+    size_t buff_size;
 };
 
-struct chat_server {
-	/** Listening socket. To accept new clients. */
-	int socket;
-	/** Array of peers. */
-	/* ... */
-	/* PUT HERE OTHER MEMBERS */
+struct chat_server
+{
+    /** Listening socket. To accept new clients. */
+    int socket;
+    /** Array of peers. */
+    struct chat_peer chat_peers[1024];
+    int num_peers;
+
+    struct epoll_event chat_event;
+    int file_descriptor;
+
+    char *input_buff;
+    int size_input_buff;
+    int capacity_input_buff;
 };
 
 struct chat_server *
 chat_server_new(void)
 {
-	struct chat_server *server = calloc(1, sizeof(*server));
-	server->socket = -1;
+    struct chat_server *server = calloc(1, sizeof(*server));
+    server->socket = -1;
 
-	/* IMPLEMENT THIS FUNCTION */
+    server->num_peers = 0;
+    server->size_input_buff = 0;
+    server->capacity_input_buff = 2;
+    server->input_buff = calloc(server->capacity_input_buff, sizeof(char));
 
-	return server;
+    return server;
 }
 
-void
-chat_server_delete(struct chat_server *server)
+void chat_server_delete(struct chat_server *server)
 {
-	if (server->socket >= 0)
-		close(server->socket);
+    if (server->socket >= 0)
+        close(server->socket);
 
-	/* IMPLEMENT THIS FUNCTION */
-
-	free(server);
+    free(server->input_buff);
+    free(server);
 }
 
-int
-chat_server_listen(struct chat_server *server, uint16_t port)
+int chat_server_listen(struct chat_server *server, uint16_t port)
 {
-	struct sockaddr_in addr;
-	memset(&addr, 0, sizeof(addr));
-	addr.sin_port = htons(port);
-	/* Listen on all IPs of this machine. */
-	addr.sin_addr.s_addr = htonl(INADDR_ANY);
+    struct sockaddr_in server_addr;
+    memset(&server_addr, 0, sizeof(server_addr));
+    server_addr.sin_port = htons(port);
+    server_addr.sin_addr.s_addr = htonl(INADDR_ANY);
 
-	/*
-	 * 1) Create a server socket (function socket()).
-	 * 2) Bind the server socket to addr (function bind()).
-	 * 3) Listen the server socket (function listen()).
-	 * 4) Create epoll/kqueue if needed.
-	 */
-	/* IMPLEMENT THIS FUNCTION */
-	(void)server;
+    // Create a server socket
+    if ((server->socket = socket(AF_INET, SOCK_STREAM, 0)) < 0)
+    {
+        perror("Failed to create server socket");
+        return CHAT_ERR_SYS;
+    }
 
-	return CHAT_ERR_NOT_IMPLEMENTED;
+    // Set socket options
+    int optval = 1;
+    if (setsockopt(server->socket, SOL_SOCKET, SO_REUSEADDR, &optval, sizeof(optval)) < 0)
+    {
+        perror("Failed to set socket options");
+        close(server->socket);
+        return CHAT_ERR_SYS;
+    }
+
+    // Set socket as non-blocking
+    fcntl(server->socket, F_SETFL, O_NONBLOCK | fcntl(server->socket, F_GETFL, 0));
+
+    // Bind the server socket
+    if (bind(server->socket, (struct sockaddr *)&server_addr, sizeof(server_addr)) < 0)
+    {
+        perror("Failed to bind server socket");
+        close(server->socket);
+        return CHAT_ERR_PORT_BUSY;
+    }
+
+    // Listen on the server socket
+    if (listen(server->socket, SOMAXCONN) < 0)
+    {
+        perror("Failed to listen on server socket");
+        close(server->socket);
+        return CHAT_ERR_SYS;
+    }
+
+    // Create epoll file descriptor
+    if ((server->file_descriptor = epoll_create(1)) < 0)
+    {
+        perror("Failed to create epoll file descriptor");
+        close(server->socket);
+        return CHAT_ERR_SYS;
+    }
+
+    server->chat_event.events = BOTH();
+    server->chat_event.data.fd = server->socket;
+
+    // Add server socket to epoll
+    if (epoll_ctl(server->file_descriptor, EPOLL_CTL_ADD, server->socket, &server->chat_event) < 0)
+    {
+        perror("Failed to add server socket to epoll");
+        close(server->socket);
+        close(server->file_descriptor);
+        return CHAT_ERR_SYS;
+    }
+
+    return 0;
 }
 
-struct chat_message *
-chat_server_pop_next(struct chat_server *server)
+struct chat_message *chat_server_pop_next(struct chat_server *server)
 {
-	/* IMPLEMENT THIS FUNCTION */
-	(void)server;
-	return NULL;
+    struct chat_message *chat_msg = NULL;
+
+    int cursor = 0;
+    while (cursor < server->size_input_buff && server->input_buff[cursor] != '\n')
+    {
+        cursor++;
+    }
+    cursor++;
+
+    if (cursor <= server->size_input_buff)
+    {
+        chat_msg = calloc(1, sizeof(struct chat_message));
+        chat_msg->data = calloc(cursor + 1, sizeof(char));
+        strncpy(chat_msg->data, server->input_buff, cursor);
+        chat_msg->data[cursor] = '\0';
+
+        for (int i = cursor; i < server->size_input_buff; ++i)
+        {
+            server->input_buff[i - cursor] = server->input_buff[i];
+        }
+
+        server->size_input_buff -= cursor;
+    }
+
+    return chat_msg;
 }
 
-int
-chat_server_update(struct chat_server *server, double timeout)
+int chat_server_update(struct chat_server *server, double timeout)
 {
-	/*
-	 * 1) Wait on epoll/kqueue/poll for update on any socket.
-	 * 2) Handle the update.
-	 * 2.1) If the update was on listen-socket, then you probably need to
-	 *     call accept() on it - a new client wants to join.
-	 * 2.2) If the update was on a client-socket, then you might want to
-	 *     read/write on it.
-	 */
-	(void)server;
-	(void)timeout;
-	return CHAT_ERR_NOT_IMPLEMENTED;
+    /*
+     * 1) Wait on epoll for update on any socket.
+     * 2) Handle the update.
+     * 2.1) If the update was on listen-socket, then you probably need to
+     *     call accept() on it - a new client wants to join.
+     * 2.2) If the update was on a client-socket, then you might want to
+     *     read/write on it.
+     */
+    if (server->socket < 0)
+    {
+        return CHAT_ERR_NOT_STARTED;
+    }
+
+    int timeout_ms = timeout >= 0 ? (int)timeout * 1000 : -1;
+
+    int epoll_events_count;
+    int size_events = server->num_peers + 1;
+    struct epoll_event *events = calloc(size_events, sizeof(struct epoll_event));
+
+    if ((epoll_events_count = epoll_wait(server->file_descriptor, events, size_events, timeout_ms)) < 0)
+    {
+        perror("epoll_wait() failed");
+        free(events);
+        return CHAT_ERR_SYS;
+    }
+    else if (epoll_events_count == 0)
+    {
+        perror("timeout");
+        free(events);
+        return CHAT_ERR_TIMEOUT;
+    }
+
+    for (int i = 0; i < size_events; ++i)
+    {
+        if (events[i].events & EPOLLIN && events[i].data.fd == server->socket)
+        {
+            struct sockaddr_in client_addr;
+            socklen_t client_len = sizeof(client_addr);
+            int client_fd;
+            if ((client_fd = accept(server->socket, (struct sockaddr *)&client_addr, &client_len)) < 0)
+            {
+                perror("accept() failed");
+                free(events);
+                return CHAT_ERR_SYS;
+            }
+
+            fcntl(client_fd, F_SETFL, fcntl(client_fd, F_GETFL, 0) | O_NONBLOCK);
+
+            struct epoll_event epoll_event;
+            epoll_event.data.fd = client_fd;
+            epoll_event.events = BOTH();
+
+            if (epoll_ctl(server->file_descriptor, EPOLL_CTL_ADD, client_fd, &epoll_event) < 0)
+            {
+                perror("epoll_ctl() failed");
+                close(client_fd);
+                free(events);
+                return CHAT_ERR_SYS;
+            }
+
+            server->chat_peers[server->num_peers].buff_capacity = 2;
+            server->chat_peers[server->num_peers].buff_size = 0;
+            server->chat_peers[server->num_peers].output_buff = calloc(server->chat_peers[server->num_peers].buff_capacity, sizeof(char));
+            server->chat_peers[server->num_peers++].socket = client_fd;
+
+            continue;
+        }
+
+        if (events[i].events & EPOLLOUT)
+        { // SERVER write
+            struct chat_peer *chat_peer = NULL;
+            for (int j = 0; j < server->num_peers; ++j)
+            {
+                if (server->chat_peers[j].socket == events[i].data.fd)
+                {
+                    chat_peer = &server->chat_peers[j];
+                }
+            }
+            if (chat_peer == NULL)
+            {
+                perror("chat_peer");
+                exit(EXIT_FAILURE);
+            }
+
+            ssize_t send_bytes_check = send(events[i].data.fd, chat_peer->output_buff, chat_peer->buff_size, 0);
+            if (send_bytes_check < 0)
+            {
+                return CHAT_ERR_SYS;
+            }
+            size_t send_bytes = (size_t)send_bytes_check;
+            if (send_bytes != chat_peer->buff_size)
+            {
+                for (int j = 0; j + send_bytes != chat_peer->buff_size; ++j)
+                {
+                    chat_peer->output_buff[j] = chat_peer->output_buff[j + send_bytes];
+                }
+
+                chat_peer->buff_size -= send_bytes;
+            }
+            else
+            {
+                chat_peer->buff_size -= send_bytes;
+
+                struct epoll_event epoll_event;
+                epoll_event.events = BOTH();
+                epoll_event.data.fd = chat_peer->socket;
+                if (epoll_ctl(server->file_descriptor, EPOLL_CTL_MOD, chat_peer->socket, &epoll_event) < 0)
+                {
+                    perror("epoll_ctl() failed");
+                    return CHAT_ERR_SYS;
+                }
+            }
+        }
+
+        if (events[i].events & EPOLLIN)
+        { // CLIENT write
+            char buf[MAX_BUFFER_SIZE];
+            ssize_t rec = recv(events[i].data.fd, buf, MAX_BUFFER_SIZE, MSG_DONTWAIT);
+
+            for (int j = 0; j < rec; ++j)
+            {
+                if (j + server->size_input_buff >= server->capacity_input_buff)
+                {
+                    server->capacity_input_buff *= 2;
+                    server->input_buff = realloc(server->input_buff, server->capacity_input_buff * sizeof(char));
+                }
+                server->input_buff[j + server->size_input_buff] = buf[j];
+            }
+            server->size_input_buff += (int)rec;
+
+            buf[rec] = '\0'; // TODO remove
+            if (rec == 0)
+            {
+                // TODO disconnect
+            }
+
+            for (int j = 0; j < server->num_peers; ++j)
+            {
+                if (server->chat_peers[j].socket != events[i].data.fd)
+                {
+                    struct epoll_event epoll_event;
+                    epoll_event.data.fd = server->chat_peers[j].socket;
+                    epoll_event.events = BOTH() | EPOLLOUT;
+                    if (epoll_ctl(server->file_descriptor, EPOLL_CTL_MOD, server->chat_peers[j].socket, &epoll_event) < 0)
+                    {
+                        perror("epoll_ctl() failed");
+                        return CHAT_ERR_SYS;
+                    }
+                }
+            }
+
+            for (int j = 0; j < server->num_peers; ++j)
+            {
+                if (events[i].data.fd == server->chat_peers[j].socket)
+                    continue;
+                for (int k = 0; k < rec; ++k)
+                {
+                    if (k + server->chat_peers[j].buff_size >= server->chat_peers[j].buff_capacity)
+                    {
+                        server->chat_peers[j].buff_capacity *= 2;
+                        server->chat_peers[j].output_buff = realloc(server->chat_peers[j].output_buff, sizeof(char) * server->chat_peers[j].buff_capacity);
+                    }
+                    server->chat_peers[j].output_buff[k + server->chat_peers[j].buff_size] = buf[k];
+                }
+                server->chat_peers[j].buff_size += rec;
+            }
+        }
+    }
+
+    free(events);
+    return 0;
 }
 
-int
-chat_server_get_descriptor(const struct chat_server *server)
+int chat_server_get_socket(const struct chat_server *server)
+{
+    return server->socket;
+}
+
+int chat_server_get_descriptor(const struct chat_server *server)
+{
+    return server->socket;
+}
+
+int chat_server_get_events(const struct chat_server *server)
+{
+    int events = 0;
+
+    if (server->socket != -1)
+    {
+        events |= CHAT_EVENT_INPUT;
+
+        for (int i = 0; i < server->num_peers; ++i)
+        {
+            if (server->chat_peers[i].socket != -1 && server->chat_peers[i].buff_size > 0)
+            {
+                events |= CHAT_EVENT_OUTPUT;
+                break;
+            }
+        }
+    }
+
+    return events;
+}
+
+int chat_server_feed(struct chat_server *server, const char *msg, uint32_t msg_size)
 {
 #if NEED_SERVER_FEED
-	/* IMPLEMENT THIS FUNCTION if want +5 points. */
-
-	/*
-	 * Server has multiple sockets - own and from connected clients. Hence
-	 * you can't return a socket here. But if you are using epoll/kqueue,
-	 * then you can return their descriptor. These descriptors can be polled
-	 * just like sockets and will return an event when any of their owned
-	 * descriptors has any events.
-	 *
-	 * For example, assume you created an epoll descriptor and added to
-	 * there a listen-socket and a few client-sockets. Now if you will call
-	 * poll() on the epoll's descriptor, then on return from poll() you can
-	 * be sure epoll_wait() can return something useful for some of those
-	 * sockets.
-	 */
+    /* IMPLEMENT THIS FUNCTION if want +5 points. */
 #endif
-	(void)server;
-	return -1;
-}
-
-int
-chat_server_get_events(const struct chat_server *server)
-{
-	/*
-	 * IMPLEMENT THIS FUNCTION - add OUTPUT event if has non-empty output
-	 * buffer in any of the client-sockets.
-	 */
-	(void)server;
-	return CHAT_EVENT_INPUT;
-}
-
-int
-chat_server_feed(struct chat_server *server, const char *msg, uint32_t msg_size)
-{
-#if NEED_SERVER_FEED
-	/* IMPLEMENT THIS FUNCTION if want +5 points. */
-#endif
-	(void)server;
-	(void)msg;
-	(void)msg_size;
-	return CHAT_ERR_NOT_IMPLEMENTED;
+    (void)server;
+    (void)msg;
+    (void)msg_size;
+    return CHAT_ERR_NOT_IMPLEMENTED;
 }
