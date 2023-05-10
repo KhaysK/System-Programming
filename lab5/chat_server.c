@@ -172,34 +172,34 @@ int chat_server_update(struct chat_server *server, double timeout)
 
     int timeout_ms = timeout >= 0 ? (int)timeout * 1000 : -1;
 
-    int epoll_events_count;
-    int size_events = server->num_peers + 1;
-    struct epoll_event *events = calloc(size_events, sizeof(struct epoll_event));
+    int num_events;
+    int max_events = server->num_peers + 1;
+    struct epoll_event *event_list = calloc(max_events, sizeof(struct epoll_event));
 
-    if ((epoll_events_count = epoll_wait(server->file_descriptor, events, size_events, timeout_ms)) < 0)
+    if ((num_events = epoll_wait(server->file_descriptor, event_list, max_events, timeout_ms)) < 0)
     {
         perror("epoll_wait() failed");
-        free(events);
+        free(event_list);
         return CHAT_ERR_SYS;
     }
-    else if (epoll_events_count == 0)
+    else if (num_events == 0)
     {
         perror("timeout");
-        free(events);
+        free(event_list);
         return CHAT_ERR_TIMEOUT;
     }
 
-    for (int i = 0; i < size_events; ++i)
+    for (int i = 0; i < max_events; ++i)
     {
-        if (events[i].events & EPOLLIN && events[i].data.fd == server->socket)
+        if (event_list[i].events & EPOLLIN && event_list[i].data.fd == server->socket)
         {
-            struct sockaddr_in client_addr;
-            socklen_t client_len = sizeof(client_addr);
-            int client_fd;
-            if ((client_fd = accept(server->socket, (struct sockaddr *)&client_addr, &client_len)) < 0)
+            struct sockaddr_in address;
+            socklen_t length = sizeof(address);
+            int client_fd = accept(server->socket, (struct sockaddr *)&address, &length);
+            if (client_fd < 0)
             {
                 perror("accept() failed");
-                free(events);
+                free(event_list);
                 return CHAT_ERR_SYS;
             }
 
@@ -213,120 +213,116 @@ int chat_server_update(struct chat_server *server, double timeout)
             {
                 perror("epoll_ctl() failed");
                 close(client_fd);
-                free(events);
+                free(event_list);
                 return CHAT_ERR_SYS;
             }
 
-            server->chat_peers[server->num_peers].buff_capacity = 2;
-            server->chat_peers[server->num_peers].buff_size = 0;
-            server->chat_peers[server->num_peers].output_buff = calloc(server->chat_peers[server->num_peers].buff_capacity, sizeof(char));
-            server->chat_peers[server->num_peers++].socket = client_fd;
+            struct chat_peer *new_peer = &server->chat_peers[server->num_peers++];
+            new_peer->buff_capacity = 2;
+            new_peer->buff_size = 0;
+            new_peer->output_buff = calloc(new_peer->buff_capacity, sizeof(char));
+            new_peer->socket = client_fd;
 
             continue;
         }
 
-        if (events[i].events & EPOLLOUT)
-        { // SERVER write
-            struct chat_peer *chat_peer = NULL;
-            for (int j = 0; j < server->num_peers; ++j)
+        if ((event_list[i].events & EPOLLOUT) && (event_list[i].data.fd == server->socket))
+        {
+            struct chat_peer *target_peer = NULL;
+            for (int index = 0; index < server->num_peers; ++index)
             {
-                if (server->chat_peers[j].socket == events[i].data.fd)
+                if (server->chat_peers[index].socket == event_list[i].data.fd)
                 {
-                    chat_peer = &server->chat_peers[j];
+                    target_peer = &server->chat_peers[index];
+                    break;
                 }
             }
-            if (chat_peer == NULL)
+            if (target_peer == NULL)
             {
-                perror("chat_peer");
+                perror("Failed to find chat peer");
                 exit(EXIT_FAILURE);
             }
 
-            ssize_t send_bytes_check = send(events[i].data.fd, chat_peer->output_buff, chat_peer->buff_size, 0);
-            if (send_bytes_check < 0)
+            ssize_t bytes_sent = send(event_list[i].data.fd, target_peer->output_buff, target_peer->buff_size, 0);
+            if (bytes_sent < 0)
             {
                 return CHAT_ERR_SYS;
             }
-            size_t send_bytes = (size_t)send_bytes_check;
-            if (send_bytes != chat_peer->buff_size)
+            size_t sent_bytes = (size_t)bytes_sent;
+            if (sent_bytes != target_peer->buff_size)
             {
-                for (int j = 0; j + send_bytes != chat_peer->buff_size; ++j)
+                for (int i = 0; i + sent_bytes != target_peer->buff_size; ++i)
                 {
-                    chat_peer->output_buff[j] = chat_peer->output_buff[j + send_bytes];
+                    target_peer->output_buff[i] = target_peer->output_buff[i + sent_bytes];
                 }
 
-                chat_peer->buff_size -= send_bytes;
+                target_peer->buff_size -= sent_bytes;
             }
             else
             {
-                chat_peer->buff_size -= send_bytes;
+                target_peer->buff_size -= sent_bytes;
 
                 struct epoll_event epoll_event;
                 epoll_event.events = BOTH();
-                epoll_event.data.fd = chat_peer->socket;
-                if (epoll_ctl(server->file_descriptor, EPOLL_CTL_MOD, chat_peer->socket, &epoll_event) < 0)
+                epoll_event.data.fd = target_peer->socket;
+                if (epoll_ctl(server->file_descriptor, EPOLL_CTL_MOD, target_peer->socket, &epoll_event) < 0)
                 {
-                    perror("epoll_ctl() failed");
+                    perror("Failed to modify epoll event");
                     return CHAT_ERR_SYS;
                 }
             }
         }
 
-        if (events[i].events & EPOLLIN)
-        { // CLIENT write
-            char buf[MAX_BUFFER_SIZE];
-            ssize_t rec = recv(events[i].data.fd, buf, MAX_BUFFER_SIZE, MSG_DONTWAIT);
+        if ((event_list[i].events & EPOLLIN) && (event_list[i].data.fd != server->socket))
+        {
+            char buffer[MAX_BUFFER_SIZE];
+            ssize_t bytes_received = recv(event_list[i].data.fd, buffer, MAX_BUFFER_SIZE, MSG_DONTWAIT);
 
-            for (int j = 0; j < rec; ++j)
+            for (int i = 0; i < bytes_received; ++i)
             {
-                if (j + server->size_input_buff >= server->capacity_input_buff)
+                if (i + server->size_input_buff >= server->capacity_input_buff)
                 {
                     server->capacity_input_buff *= 2;
                     server->input_buff = realloc(server->input_buff, server->capacity_input_buff * sizeof(char));
                 }
-                server->input_buff[j + server->size_input_buff] = buf[j];
+                server->input_buff[i + server->size_input_buff] = buffer[i];
             }
-            server->size_input_buff += (int)rec;
+            server->size_input_buff += (int)bytes_received;
 
-            buf[rec] = '\0'; // TODO remove
-            if (rec == 0)
+            for (int i = 0; i < server->num_peers; ++i)
             {
-                // TODO disconnect
-            }
-
-            for (int j = 0; j < server->num_peers; ++j)
-            {
-                if (server->chat_peers[j].socket != events[i].data.fd)
+                if (server->chat_peers[i].socket != event_list[i].data.fd)
                 {
                     struct epoll_event epoll_event;
-                    epoll_event.data.fd = server->chat_peers[j].socket;
+                    epoll_event.data.fd = server->chat_peers[i].socket;
                     epoll_event.events = BOTH() | EPOLLOUT;
-                    if (epoll_ctl(server->file_descriptor, EPOLL_CTL_MOD, server->chat_peers[j].socket, &epoll_event) < 0)
+                    if (epoll_ctl(server->file_descriptor, EPOLL_CTL_MOD, server->chat_peers[i].socket, &epoll_event) < 0)
                     {
-                        perror("epoll_ctl() failed");
+                        perror("Failed to modify epoll event");
                         return CHAT_ERR_SYS;
                     }
                 }
             }
 
-            for (int j = 0; j < server->num_peers; ++j)
+            for (int i = 0; i < server->num_peers; ++i)
             {
-                if (events[i].data.fd == server->chat_peers[j].socket)
+                if (event_list[i].data.fd == server->chat_peers[i].socket)
                     continue;
-                for (int k = 0; k < rec; ++k)
+                for (int j = 0; j < bytes_received; ++j)
                 {
-                    if (k + server->chat_peers[j].buff_size >= server->chat_peers[j].buff_capacity)
+                    if (j + server->chat_peers[i].buff_size >= server->chat_peers[i].buff_capacity)
                     {
-                        server->chat_peers[j].buff_capacity *= 2;
-                        server->chat_peers[j].output_buff = realloc(server->chat_peers[j].output_buff, sizeof(char) * server->chat_peers[j].buff_capacity);
+                        server->chat_peers[i].buff_capacity *= 2;
+                        server->chat_peers[i].output_buff = realloc(server->chat_peers[i].output_buff, sizeof(char) * server->chat_peers[i].buff_capacity);
                     }
-                    server->chat_peers[j].output_buff[k + server->chat_peers[j].buff_size] = buf[k];
+                    server->chat_peers[i].output_buff[j + server->chat_peers[i].buff_size] = buffer[j];
                 }
-                server->chat_peers[j].buff_size += rec;
+                server->chat_peers[i].buff_size += bytes_received;
             }
         }
     }
 
-    free(events);
+    free(event_list);
     return 0;
 }
 
